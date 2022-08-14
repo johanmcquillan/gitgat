@@ -1,8 +1,9 @@
 extern crate git2;
 
+use std::time::Duration;
+
 use git2::{DiffDelta, DiffLine, DiffOptions, Oid, Repository, Sort};
 use indicatif::{ProgressBar, ProgressIterator, ProgressStyle};
-use std::time::Duration;
 
 /// Options for running gitgat.
 pub struct Opts<'a> {

@@ -1,5 +1,6 @@
 extern crate git2;
 
+use std::cmp;
 use std::time::Duration;
 
 use git2::{DiffDelta, DiffLine, DiffOptions, Oid, Repository, Sort};
@@ -13,11 +14,68 @@ pub struct Opts<'a> {
 }
 
 #[derive(Default)]
-struct Contributions {
+struct Commit {
+    hash: String,
+    summary: String,
+    additions: u32,
+    deletions: u32,
+}
+
+impl Commit {
+    fn new(hash: String, summary: String) -> Commit {
+        Commit {
+            hash: hash,
+            summary: summary,
+            additions: 0,
+            deletions: 0,
+        }
+    }
+
+    fn new_from_commit(c: git2::Commit) -> Commit {
+        Commit::new(
+            c.id().to_string().to_owned(),
+            c.summary().unwrap().to_owned(),
+        )
+    }
+    fn size(&self) -> u32 {
+        cmp::max(self.additions, self.deletions)
+    }
+}
+
+#[derive(Default)]
+struct Stats<'a> {
     commits: u32,
     additions: u32,
     deletions: u32,
-    binaries: u32,
+    top: Option<&'a Commit>,
+}
+
+impl<'a> Stats<'a> {
+    fn update(mut self, commit: &'a Commit) -> Stats<'a> {
+        self.commits += 1;
+        self.additions += commit.additions;
+        self.deletions += commit.deletions;
+        match self.top {
+            Some(top) => {
+                if commit.size() > top.size() {
+                    self.top = Some(commit)
+                }
+            }
+            None => self.top = Some(commit),
+        };
+        return self;
+    }
+}
+
+#[derive(Default)]
+struct History {
+    commits: Vec<Commit>,
+}
+
+impl<'a> History {
+    fn stats(&'a self) -> Stats<'a> {
+        self.commits.iter().fold(Stats::default(), Stats::update)
+    }
 }
 
 /// Run gitgat on a repository.
@@ -29,7 +87,7 @@ pub fn run(opts: Opts) {
 
     let oids = collect_oids(&repo);
 
-    let mut contributions = Contributions::default();
+    let mut history = History::default();
 
     for i in (0..oids.len()).progress_with_style(oid_progress_style()) {
         let commit = repo.find_commit(oids[i]).unwrap();
@@ -49,7 +107,7 @@ pub fn run(opts: Opts) {
             )
             .unwrap();
 
-        contributions.commits += 1;
+        let mut c = Commit::new_from_commit(commit);
         diff.foreach(
             &mut (|_, _| true),
             None,
@@ -63,21 +121,32 @@ pub fn run(opts: Opts) {
                 {
                     return true;
                 };
-                // println!("{}", String::from_utf8(hunk.header().to_vec()).unwrap());
                 match line.origin() {
-                    '+' => contributions.additions += 1,
-                    '-' => contributions.deletions += 1,
-                    'B' => contributions.binaries += 1,
+                    '+' => c.additions += 1,
+                    '-' => c.deletions += 1,
                     _ => {}
                 };
                 return true;
             }),
         )
         .unwrap();
+        history.commits.push(c);
     }
-    println!(" {} commits", contributions.commits);
-    println!("+{}", contributions.additions);
-    println!("-{}", contributions.deletions);
+    let stats = history.stats();
+    println!(" {} commits", stats.commits);
+    println!("+{}", stats.additions);
+    println!("-{}", stats.deletions);
+    println!("Biggest commit {}", &stats.top.unwrap().hash);
+    println!("Biggest commit {}", &stats.top.unwrap().size());
+    println!("Biggest commit {}", &stats.top.unwrap().summary);
+}
+
+fn oid_progress_style() -> ProgressStyle {
+    ProgressStyle::with_template(
+        "[{elapsed_precise}] [{bar:30.green}] {human_pos:>7}/{human_len:7} commits",
+    )
+    .unwrap()
+    .progress_chars("▮ ")
 }
 
 /// Extracts a vector of object IDs from repository.
@@ -96,12 +165,4 @@ fn collect_oids(repo: &Repository) -> Vec<Oid> {
     collector_pb.is_finished();
 
     return oids;
-}
-
-fn oid_progress_style() -> ProgressStyle {
-    ProgressStyle::with_template(
-        "[{elapsed_precise}] [{bar:30.green}] {human_pos:>7}/{human_len:7} commits",
-    )
-    .unwrap()
-    .progress_chars("▮ ")
 }

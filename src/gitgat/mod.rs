@@ -11,6 +11,14 @@ pub struct Opts<'a> {
     pub excluded_dirs: Vec<&'a str>,
 }
 
+#[derive(Default)]
+struct Contributions {
+    commits: u32,
+    additions: u32,
+    deletions: u32,
+    binaries: u32,
+}
+
 /// Run gitgat on a repository.
 pub fn run(opts: Opts) {
     let repo = match Repository::open("/home/johan/core3/src") {
@@ -20,9 +28,7 @@ pub fn run(opts: Opts) {
 
     let oids = collect_oids(&repo);
 
-    let mut commits = 0;
-    let mut insertions: u32 = 0;
-    let mut deletions: u32 = 0;
+    let mut contributions = Contributions::default();
 
     for i in (0..oids.len()).progress_with_style(oid_progress_style()) {
         let commit = repo.find_commit(oids[i]).unwrap();
@@ -42,7 +48,7 @@ pub fn run(opts: Opts) {
             )
             .unwrap();
 
-        commits += 1;
+        contributions.commits += 1;
         diff.foreach(
             &mut (|_, _| true),
             None,
@@ -57,19 +63,20 @@ pub fn run(opts: Opts) {
                     return true;
                 };
                 // println!("{}", String::from_utf8(hunk.header().to_vec()).unwrap());
-                if line.origin() == '+' {
-                    insertions += 1;
-                } else if line.origin() == '-' {
-                    deletions += 1;
+                match line.origin() {
+                    '+' => contributions.additions += 1,
+                    '-' => contributions.deletions += 1,
+                    'B' => contributions.binaries += 1,
+                    _ => {}
                 };
                 return true;
             }),
         )
         .unwrap();
     }
-    println!(" {} commits", commits);
-    println!("+{}", insertions);
-    println!("-{}", deletions);
+    println!(" {} commits", contributions.commits);
+    println!("+{}", contributions.additions);
+    println!("-{}", contributions.deletions);
 }
 
 /// Extracts a vector of object IDs from repository.

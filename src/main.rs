@@ -10,9 +10,10 @@ fn build_cli() -> Command<'static> {
     Command::new("gitgat")
         .version(VERSION.unwrap_or("(unversioned)"))
         .author("Johan McQuillan <johangmcquillan@gmail.com>")
-        .about("Pipes stuff into fzf")
+        .about("Generates useless statistics from a git repo")
         .setting(AppSettings::ArgRequiredElseHelp)
         .setting(AppSettings::GlobalVersion)
+        .arg(Arg::new("repo").value_name("REPO").required(true).help("Repository path"))
         .arg(Arg::new("author").value_name("AUTHOR").required(true).help("Author name"))
         .arg(
             Arg::new("exclude")
@@ -30,6 +31,7 @@ fn build_cli() -> Command<'static> {
 fn main() {
     let matches = build_cli().get_matches();
     gitgat::run(gitgat::Opts {
+        repo: matches.get_one::<String>("repo").unwrap(),
         author: matches.get_one::<String>("author").unwrap(),
         excluded_dirs: matches
             .get_many::<String>("exclude")

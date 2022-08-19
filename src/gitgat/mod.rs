@@ -7,6 +7,7 @@ use indicatif::{ProgressBar, ProgressIterator, ProgressStyle};
 
 /// Options for running gitgat.
 pub struct Opts<'a> {
+    pub repo: &'a str,
     pub author: &'a str,
     pub excluded_dirs: Vec<&'a str>,
 }
@@ -21,7 +22,7 @@ struct Contributions {
 
 /// Run gitgat on a repository.
 pub fn run(opts: Opts) {
-    let repo = match Repository::open("/home/johan/core3/src") {
+    let repo = match Repository::open(opts.repo) {
         Ok(repo) => repo,
         Err(e) => panic!("failed to open: {}", e),
     };

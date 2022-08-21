@@ -1,10 +1,42 @@
 extern crate git2;
 
 use std::cmp;
-use std::time::Duration;
+use std::error;
+use std::fmt;
+use std::time;
 
-use git2::{DiffDelta, DiffLine, DiffOptions, Oid, Repository, Sort};
 use indicatif::{ProgressBar, ProgressIterator, ProgressStyle};
+
+type Result<T> = std::result::Result<T, Error>;
+
+#[derive(Debug)]
+pub enum Error {
+    Git(git2::Error),
+}
+
+impl fmt::Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            // The wrapped error contains additional information and is available
+            // via the source() method.
+            Error::Git(err) => write!(f, "encountered a git error: {}", err),
+        }
+    }
+}
+
+impl error::Error for Error {
+    fn source(&self) -> Option<&(dyn error::Error + 'static)> {
+        match *self {
+            Error::Git(ref e) => Some(e),
+        }
+    }
+}
+
+impl From<git2::Error> for Error {
+    fn from(err: git2::Error) -> Error {
+        Error::Git(err)
+    }
+}
 
 /// Options for running gitgat.
 pub struct Opts<'a> {
@@ -34,7 +66,7 @@ impl Commit {
     fn new_from_commit(c: git2::Commit) -> Commit {
         Commit::new(
             c.id().to_string().to_owned(),
-            c.summary().unwrap().to_owned(),
+            c.summary().unwrap_or("<unknown summary>").to_owned(),
         )
     }
     fn size(&self) -> u32 {
@@ -79,57 +111,51 @@ impl<'a> History {
 }
 
 /// Run gitgat on a repository.
-pub fn run(opts: Opts) {
-    let repo = match Repository::open(opts.repo) {
-        Ok(repo) => repo,
-        Err(e) => panic!("failed to open: {}", e),
-    };
-
-    let oids = collect_oids(&repo);
+pub fn run(opts: Opts) -> Result<()> {
+    let repo = git2::Repository::open(opts.repo)?;
+    let oids = collect_oids(&repo)?;
 
     let mut history = History::default();
-
     for i in (0..oids.len()).progress_with_style(oid_progress_style()) {
-        let commit = repo.find_commit(oids[i]).unwrap();
+        let commit = repo.find_commit(oids[i])?;
         if commit.author().name() != Some(opts.author) {
             continue;
         }
-        let prev_commit = repo.find_commit(oids[i + 1]).unwrap();
-        let diff = repo
-            .diff_tree_to_tree(
-                Some(&prev_commit.tree().unwrap()),
-                Some(&commit.tree().unwrap()),
-                Some(
-                    &mut DiffOptions::default()
-                        .ignore_blank_lines(true)
-                        .ignore_filemode(true),
-                ),
-            )
-            .unwrap();
+        let prev_commit = repo.find_commit(oids[i + 1])?;
+        let diff = repo.diff_tree_to_tree(
+            Some(&prev_commit.tree()?),
+            Some(&commit.tree()?),
+            Some(
+                &mut git2::DiffOptions::default()
+                    .ignore_blank_lines(true)
+                    .ignore_filemode(true),
+            ),
+        )?;
 
         let mut c = Commit::new_from_commit(commit);
         diff.foreach(
             &mut (|_, _| true),
             None,
             None,
-            Some(&mut |delta: DiffDelta, _, line: DiffLine| -> bool {
-                // Skip if the line if it is in an excluded directory.
-                if opts
-                    .excluded_dirs
-                    .iter()
-                    .any(|dir| delta.new_file().path().unwrap().starts_with(dir))
-                {
+            Some(
+                &mut |delta: git2::DiffDelta, _, line: git2::DiffLine| -> bool {
+                    // Skip if the line if it is in an excluded directory.
+                    if opts
+                        .excluded_dirs
+                        .iter()
+                        .any(|dir| delta.new_file().path().unwrap().starts_with(dir))
+                    {
+                        return true;
+                    };
+                    match line.origin() {
+                        '+' => c.additions += 1,
+                        '-' => c.deletions += 1,
+                        _ => {}
+                    };
                     return true;
-                };
-                match line.origin() {
-                    '+' => c.additions += 1,
-                    '-' => c.deletions += 1,
-                    _ => {}
-                };
-                return true;
-            }),
-        )
-        .unwrap();
+                },
+            ),
+        )?;
         history.commits.push(c);
     }
     let stats = history.stats();
@@ -139,6 +165,7 @@ pub fn run(opts: Opts) {
     println!("Biggest commit {}", &stats.top.unwrap().hash);
     println!("Biggest commit {}", &stats.top.unwrap().size());
     println!("Biggest commit {}", &stats.top.unwrap().summary);
+    Ok(())
 }
 
 fn oid_progress_style() -> ProgressStyle {
@@ -150,19 +177,19 @@ fn oid_progress_style() -> ProgressStyle {
 }
 
 /// Extracts a vector of object IDs from repository.
-fn collect_oids(repo: &Repository) -> Vec<Oid> {
-    let mut revwalk = repo.revwalk().unwrap();
-    revwalk.push_head().unwrap();
-    revwalk.set_sorting(Sort::TOPOLOGICAL).unwrap();
+fn collect_oids(repo: &git2::Repository) -> Result<Vec<git2::Oid>> {
+    let mut revwalk = repo.revwalk()?;
+    revwalk.push_head()?;
+    revwalk.set_sorting(git2::Sort::TOPOLOGICAL)?;
     let collector_pb = ProgressBar::new_spinner().with_style(
         ProgressStyle::with_template("Collecting commits {spinner}")
             .unwrap()
             .tick_chars("▖▘▝▗"),
     );
-    collector_pb.enable_steady_tick(Duration::from_millis(500));
-    let oids: Vec<Oid> = revwalk.map(|o| o.unwrap()).collect();
+
+    collector_pb.enable_steady_tick(time::Duration::from_millis(500));
+    let oids: Vec<git2::Oid> = revwalk.try_collect::<Vec<git2::Oid>>()?;
     collector_pb.disable_steady_tick();
     collector_pb.is_finished();
-
-    return oids;
+    return Ok(oids);
 }

@@ -1,3 +1,5 @@
+#![feature(iterator_try_collect)]
+
 mod gitgat;
 
 extern crate clap;
@@ -38,5 +40,6 @@ fn main() {
             .unwrap_or_default()
             .map(|o| o.as_str())
             .collect(),
-    });
+    })
+    .unwrap();
 }
